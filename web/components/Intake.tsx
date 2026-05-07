@@ -21,12 +21,20 @@ export function Intake({ onSubmit, isProcessing, loadSample }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const playbookInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [playbookDragOver, setPlaybookDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [customPlaybook, setCustomPlaybook] = useState<CustomPlaybook | null>(null);
   const [playbookError, setPlaybookError] = useState<string | null>(null);
 
   const readFile = useCallback(async (file: File) => {
     setError(null);
+    // If the user dropped a .json on the document zone, route it to the
+    // playbook handler instead of rejecting -- that's almost always what
+    // they meant.
+    if (/\.json$/i.test(file.name)) {
+      await readPlaybookInner(file);
+      return;
+    }
     const isAccepted = /\.(txt|md|text|rtf)$/i.test(file.name)
       || file.type === "text/plain"
       || file.type === "application/rtf"
@@ -43,7 +51,7 @@ export function Intake({ onSubmit, isProcessing, loadSample }: Props) {
     onSubmit(text, file.name, customPlaybook);
   }, [onSubmit, customPlaybook]);
 
-  const readPlaybook = useCallback(async (file: File) => {
+  const readPlaybookInner = useCallback(async (file: File) => {
     setPlaybookError(null);
     if (!/\.json$/i.test(file.name)) {
       setPlaybookError(`Playbook must be a .json file (got ${file.name}).`);
@@ -66,6 +74,7 @@ export function Intake({ onSubmit, isProcessing, loadSample }: Props) {
       setPlaybookError(err instanceof Error ? err.message : "Couldn't read playbook.");
     }
   }, []);
+  const readPlaybook = readPlaybookInner;
 
   return (
     <section className="max-w-[820px] mx-auto px-8 pb-24">
@@ -154,14 +163,26 @@ export function Intake({ onSubmit, isProcessing, loadSample }: Props) {
           <CornerMark className="bottom-2 right-2 rotate-180" />
         </div>
 
-        <PlaybookControl
+        <PlaybookDropZone
           custom={customPlaybook}
+          dragOver={playbookDragOver}
+          error={playbookError}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setPlaybookDragOver(true);
+          }}
+          onDragLeave={() => setPlaybookDragOver(false)}
+          onDrop={async (e) => {
+            e.preventDefault();
+            setPlaybookDragOver(false);
+            const file = e.dataTransfer.files?.[0];
+            if (file) await readPlaybook(file);
+          }}
           onPick={() => playbookInputRef.current?.click()}
           onClear={() => {
             setCustomPlaybook(null);
             setPlaybookError(null);
           }}
-          error={playbookError}
         />
         <input
           ref={playbookInputRef}
@@ -193,60 +214,110 @@ export function Intake({ onSubmit, isProcessing, loadSample }: Props) {
   );
 }
 
-function PlaybookControl({
+function PlaybookDropZone({
   custom,
+  dragOver,
+  error,
+  onDragOver,
+  onDragLeave,
+  onDrop,
   onPick,
   onClear,
-  error,
 }: {
   custom: CustomPlaybook | null;
+  dragOver: boolean;
+  error: string | null;
+  onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
+  onDrop: (e: React.DragEvent) => void;
   onPick: () => void;
   onClear: () => void;
-  error: string | null;
 }) {
   return (
-    <div className="mt-6 px-1">
-      <div className="flex flex-wrap items-center justify-between gap-3 text-[12px]">
-        <div className="flex items-baseline gap-3">
-          <span className="font-mono text-[10px] uppercase tracking-widest text-tobacco">
-            Playbook
-          </span>
-          {custom ? (
-            <span className="text-ink">
-              <span className="font-mono">{custom.name}</span>{" "}
-              <span className="text-muted italic">
-                · {custom.clauseCount} {custom.clauseCount === 1 ? "clause" : "clauses"}
-              </span>
-            </span>
-          ) : (
-            <span className="text-ink">
-              Bundled <span className="text-muted italic">· 16-clause NDA standard</span>
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-3">
-          {custom && (
+    <div className="mt-6">
+      <div
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        className={`relative border border-dashed rounded-sm transition-colors px-6 py-5 ${
+          dragOver
+            ? "border-redline bg-redline/5"
+            : custom
+            ? "border-tobacco/60 bg-surface/40"
+            : "border-tobacco/40 bg-surface/30"
+        }`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <PlaybookIcon active={!!custom} />
+            <div className="min-w-0">
+              <div className="font-mono text-[10px] uppercase tracking-widest text-tobacco mb-0.5">
+                Playbook {custom ? "(custom)" : "(optional)"}
+              </div>
+              {custom ? (
+                <div className="text-sm text-ink truncate">
+                  <span className="font-mono">{custom.name}</span>
+                  <span className="text-muted italic ml-2">
+                    · {custom.clauseCount} {custom.clauseCount === 1 ? "clause" : "clauses"} loaded
+                  </span>
+                </div>
+              ) : (
+                <div className="text-sm text-ink">
+                  Using bundled <span className="text-muted italic">· 16-clause NDA standard</span>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {custom && (
+              <button
+                type="button"
+                onClick={onClear}
+                className="border border-ink/30 text-ink/80 px-3 py-2 rounded-sm font-mono text-[10px] uppercase tracking-widest hover:border-redline hover:text-redline transition-colors"
+              >
+                ✕ Reset
+              </button>
+            )}
             <button
               type="button"
-              onClick={onClear}
-              className="font-mono text-[10px] uppercase tracking-widest text-muted hover:text-redline transition-colors"
+              onClick={onPick}
+              className="bg-tobacco text-parchment px-4 py-2 rounded-sm font-mono text-[10px] uppercase tracking-widest hover:bg-ink transition-colors"
             >
-              ✕ Use bundled
+              {custom ? "Replace .json" : "Upload .json"}
             </button>
-          )}
-          <button
-            type="button"
-            onClick={onPick}
-            className="font-mono text-[10px] uppercase tracking-widest text-ink underline-offset-4 hover:underline hover:text-redline transition-colors"
-          >
-            {custom ? "Replace" : "Upload your own (.json)"}
-          </button>
+          </div>
         </div>
+        {!custom && (
+          <p className="mt-3 text-xs text-muted italic">
+            Or drag a <span className="font-mono not-italic">.json</span> playbook into this box.
+            Each entry must have a <span className="font-mono not-italic">clause</span> name.
+          </p>
+        )}
       </div>
       {error && (
         <p className="mt-2 text-xs italic text-redline">{error}</p>
       )}
     </div>
+  );
+}
+
+function PlaybookIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      width={28}
+      height={28}
+      viewBox="0 0 32 32"
+      fill="none"
+      stroke={active ? "#b91528" : "#8b6f47"}
+      strokeWidth="1.4"
+      aria-hidden="true"
+    >
+      <rect x="6" y="4" width="20" height="24" rx="1" />
+      <line x1="10" y1="10" x2="22" y2="10" />
+      <line x1="10" y1="14" x2="22" y2="14" />
+      <line x1="10" y1="18" x2="18" y2="18" />
+      <line x1="10" y1="22" x2="20" y2="22" />
+    </svg>
   );
 }
 
