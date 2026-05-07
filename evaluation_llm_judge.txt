@@ -1,0 +1,74 @@
+========================================================================
+NDA Redlining Evaluation Report
+========================================================================
+
+Detection metrics (snippet + clause-name match, threshold 0.55):
+  predicted issues : 13
+  expected  issues : 8
+  true positives   : 8
+  false positives  : 5
+  false negatives  : 0
+  precision        : 0.615
+  recall           : 1.000
+  F1               : 0.762
+
+Suggested-fix quality (avg over 8 matched pairs):
+  mean fix score   : 0.873
+
+Per-clause detection breakdown:
+  Assignment                               1/1
+  Confidential Information                 1/1
+  Disclosure required by Law               1/1
+  General                                  1/1
+  Indemnity                                1/1
+  Notices and domicile                     1/1
+  Recipient's Obligations                  1/1
+  Return of confidential information       1/1
+
+Matched pairs (sorted by combined score):
+  - clause: Assignment
+    pair score: 1.000  fix lexical sim: 0.480
+    expected snippet: Recipient may freely assign, transfer, or delegate its rights and obligations under this Agreement, in whole or in pa...
+    predicted snippet: Recipient may freely assign, transfer, or delegate its rights and obligations under this Agreement, in whole or in pa...
+
+  - clause: Indemnity
+    pair score: 1.000  fix lexical sim: 0.657
+    expected snippet: Neither Party shall have any liability to the other for any unauthorized disclosure, use, or loss of Confidential Inf...
+    predicted snippet: Neither Party shall have any liability to the other for any unauthorized disclosure, use, or loss of Confidential Inf...
+
+  - clause: Confidential Information
+    pair score: 1.000  fix lexical sim: 0.999
+    expected snippet: "Confidential Information" shall mean any and all data, materials, documents, specifications, designs, drawings, mode...
+    predicted snippet: "Confidential Information" shall mean any and all data, materials, documents, specifications, designs, drawings, mode...
+
+  - clause: Return of confidential information
+    pair score: 0.873  fix lexical sim: 0.524
+    expected snippet: Upon written request of Discloser or upon termination of this Agreement, Recipient may, at its sole discretion, eithe...
+    predicted snippet: Upon written request of Discloser or upon termination of this Agreement, Recipient may, at its sole discretion, eithe...
+
+  - clause: Disclosure required by Law
+    pair score: 0.863  fix lexical sim: 0.332
+    expected snippet: If Recipient or any of its Representatives is required by applicable law, regulation, or judicial or governmental ord...
+    predicted snippet: If Recipient or any of its Representatives is required by applicable law, regulation, or judicial or governmental ord...
+
+  - clause: Notices and domicile
+    pair score: 0.848  fix lexical sim: 0.194
+    expected snippet: Email shall suffice as notice notwithstanding any failure of the intended recipient to receive such email.
+    predicted snippet: on the date sent by email (with electronic confirmation of transmission). Email shall suffice as notice notwithstandi...
+
+  - clause: General
+    pair score: 0.807  fix lexical sim: 0.227
+    expected snippet: The Parties agree that any oral agreements, understandings, or representations shall be legally binding, and no writt...
+    predicted snippet: This Agreement shall be governed by and construed in accordance with the laws of any jurisdiction selected by Recipie...
+
+  - clause: Recipient's Obligations
+    pair score: 0.579  fix lexical sim: 0.321
+    expected snippet: Recipient may use Confidential Information solely for its own internal business purposes, including, without limitati...
+    predicted snippet: Recipient agrees to exercise at least the same degree of care to safeguard the confidentiality of Confidential Inform...
+
+Spurious (predicted but not expected):
+  - Confidentiality period: This Agreement, unless earlier terminated as provided below, shall commence on the Effective Date and shall remain in...
+  - Purpose of NDA: Recipient may use Confidential Information solely for its own internal business purposes, including, without limitati...
+  - Ownership: All Confidential Information, and any derivatives, adaptations, or modifications thereof, shall remain the exclusive ...
+  - Accuracy of the confidential information: 1.1 "Confidential Information" shall mean any and all data, materials, documents, specifications, designs, drawings, ...
+  - Privacy Policy: This Agreement constitutes the entire understanding between the Parties with respect to its subject matter and supers...
