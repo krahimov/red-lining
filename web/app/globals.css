@@ -1,0 +1,158 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: "Fraunces", Georgia, serif;
+  --font-body: "Source Serif 4", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+html, body {
+  background: #f3ede0;
+  color: #1a1612;
+  font-family: var(--font-body);
+  font-feature-settings: "ss01", "kern";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Paper grain — a subtle, layered noise that gives the parchment depth */
+.paper {
+  position: relative;
+  isolation: isolate;
+}
+.paper::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  background-image:
+    radial-gradient(rgba(122, 96, 60, 0.05) 1px, transparent 1px),
+    radial-gradient(rgba(122, 96, 60, 0.04) 1px, transparent 1px);
+  background-size: 3px 3px, 7px 7px;
+  background-position: 0 0, 1px 1px;
+  mix-blend-mode: multiply;
+}
+
+.vignette::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 60%,
+    rgba(64, 48, 28, 0.08) 100%
+  );
+}
+
+/* Decorative rule with center ornament — like a printed brief */
+.decorative-rule {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  color: #8b6f47;
+}
+.decorative-rule::before,
+.decorative-rule::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.4;
+}
+
+/* Drawing-ink underline animation for redlined snippets */
+.ink-underline {
+  background-image: linear-gradient(to right, #b91528 0%, #b91528 100%);
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 100% 2px;
+  padding-bottom: 1px;
+}
+.ink-underline.animate {
+  background-size: 0% 2px;
+  animation: draw-underline 700ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation-delay: var(--draw-delay, 0ms);
+}
+@keyframes draw-underline {
+  to { background-size: 100% 2px; }
+}
+
+/* Marginalia — number badge that looks like a hand-stamped seal */
+.seal {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #b91528;
+  color: #f3ede0;
+  font-weight: 600;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  transform: rotate(-2deg);
+}
+
+/* Rubber-stamp banner */
+.stamp {
+  font-family: var(--font-mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  border: 2px solid currentColor;
+  padding: 0.35rem 0.8rem;
+  display: inline-block;
+  transform: rotate(-1.5deg);
+  opacity: 0.86;
+}
+
+/* Drop zone idle border that breathes */
+@keyframes pulse-border {
+  0%, 100% { border-color: rgba(139, 111, 71, 0.35); }
+  50% { border-color: rgba(139, 111, 71, 0.7); }
+}
+.drop-idle {
+  animation: pulse-border 3.4s ease-in-out infinite;
+}
+
+/* Scrollbar styling for the document column */
+.doc-scroll::-webkit-scrollbar { width: 8px; }
+.doc-scroll::-webkit-scrollbar-track { background: transparent; }
+.doc-scroll::-webkit-scrollbar-thumb {
+  background: rgba(139, 111, 71, 0.3);
+  border-radius: 8px;
+}
+
+/* Ornamental divider for section breaks */
+.diamond-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  color: #8b6f47;
+  font-family: var(--font-display);
+}
+
+/* Selection color */
+::selection {
+  background: rgba(185, 21, 40, 0.18);
+  color: #1a1612;
+}
+
+/* Shimmering ink dot used during processing */
+.ink-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #1a1612;
+  animation: ink-bloom 1.4s ease-in-out infinite;
+}
+@keyframes ink-bloom {
+  0%, 100% { transform: scale(1); opacity: 0.3; }
+  50% { transform: scale(1.6); opacity: 0.9; }
+}

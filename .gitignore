@@ -1,6 +1,11 @@
 .env
 .env.*
+!.env.local.example
+!.env.example
 .venv/
 __pycache__/
 *.pyc
 .DS_Store
+node_modules/
+.next/
+.vercel
