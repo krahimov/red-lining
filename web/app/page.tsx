@@ -3,7 +3,7 @@ import { useCallback, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Header } from "@/components/Header";
 import { Hero } from "@/components/Hero";
-import { Intake } from "@/components/Intake";
+import { Intake, type CustomPlaybook } from "@/components/Intake";
 import { Processing } from "@/components/Processing";
 import { Reader } from "@/components/Reader";
 import type { Redline } from "@/lib/types";
@@ -14,6 +14,9 @@ type Submission = {
   document: string;
   documentName: string;
   redlines: Redline[];
+  playbookSource: "default" | "custom";
+  playbookClauseCount: number;
+  playbookName?: string;
 };
 
 export default function Page() {
@@ -28,14 +31,22 @@ export default function Page() {
     setError(null);
   }, []);
 
-  const submit = useCallback(async (document: string, name: string) => {
+  const submit = useCallback(async (
+    document: string,
+    name: string,
+    playbook: CustomPlaybook | null,
+  ) => {
     setPhase("processing");
     setError(null);
     try {
       const res = await fetch("/api/redline", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ document }),
+        body: JSON.stringify({
+          document,
+          playbook: playbook?.data,
+          playbookName: playbook?.name,
+        }),
       });
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
@@ -44,11 +55,16 @@ export default function Page() {
       const data = (await res.json()) as {
         redlines: Redline[];
         sanitizedDocument?: string;
+        playbookSource: "default" | "custom";
+        playbookClauseCount: number;
       };
       setSubmission({
         document: data.sanitizedDocument ?? document,
         documentName: name,
         redlines: data.redlines,
+        playbookSource: data.playbookSource,
+        playbookClauseCount: data.playbookClauseCount,
+        playbookName: playbook?.name,
       });
       setPhase("results");
     } catch (err) {
@@ -92,6 +108,11 @@ export default function Page() {
               document={submission.document}
               documentName={submission.documentName}
               redlines={submission.redlines}
+              playbookLabel={
+                submission.playbookSource === "custom"
+                  ? `${submission.playbookName ?? "custom"} · ${submission.playbookClauseCount} clauses`
+                  : `Bundled · ${submission.playbookClauseCount} clauses`
+              }
             />
             <div className="max-w-[1400px] mx-auto px-8 pb-20">
               <div className="diamond-divider mb-6">

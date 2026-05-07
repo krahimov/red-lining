@@ -5,16 +5,25 @@ import { motion } from "motion/react";
 const SAMPLE_HINT =
   "Plain-text or RTF NDAs (.txt, .rtf). Around 500-5,000 words works best.";
 
+export type CustomPlaybook = {
+  name: string;
+  data: unknown;
+  clauseCount: number;
+};
+
 type Props = {
-  onSubmit: (text: string, name: string) => void;
+  onSubmit: (text: string, name: string, playbook: CustomPlaybook | null) => void;
   isProcessing: boolean;
   loadSample: () => Promise<{ text: string; name: string }>;
 };
 
 export function Intake({ onSubmit, isProcessing, loadSample }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const playbookInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [customPlaybook, setCustomPlaybook] = useState<CustomPlaybook | null>(null);
+  const [playbookError, setPlaybookError] = useState<string | null>(null);
 
   const readFile = useCallback(async (file: File) => {
     setError(null);
@@ -31,8 +40,32 @@ export function Intake({ onSubmit, isProcessing, loadSample }: Props) {
       setError("That document looks too short to redline.");
       return;
     }
-    onSubmit(text, file.name);
-  }, [onSubmit]);
+    onSubmit(text, file.name, customPlaybook);
+  }, [onSubmit, customPlaybook]);
+
+  const readPlaybook = useCallback(async (file: File) => {
+    setPlaybookError(null);
+    if (!/\.json$/i.test(file.name)) {
+      setPlaybookError(`Playbook must be a .json file (got ${file.name}).`);
+      return;
+    }
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!Array.isArray(data) || data.length === 0) {
+        throw new Error("Playbook must be a non-empty JSON array.");
+      }
+      const allHaveClauses = data.every(
+        (c) => c && typeof c === "object" && typeof c.clause === "string",
+      );
+      if (!allHaveClauses) {
+        throw new Error('Every entry must have a "clause" string field.');
+      }
+      setCustomPlaybook({ name: file.name, data, clauseCount: data.length });
+    } catch (err) {
+      setPlaybookError(err instanceof Error ? err.message : "Couldn't read playbook.");
+    }
+  }, []);
 
   return (
     <section className="max-w-[820px] mx-auto px-8 pb-24">
@@ -89,7 +122,7 @@ export function Intake({ onSubmit, isProcessing, loadSample }: Props) {
                 disabled={isProcessing}
                 onClick={async () => {
                   const { text, name } = await loadSample();
-                  onSubmit(text, name);
+                  onSubmit(text, name, customPlaybook);
                 }}
                 className="border border-ink/40 text-ink px-6 py-3 rounded-sm font-mono text-xs uppercase tracking-widest hover:border-ink hover:bg-ink/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -121,7 +154,28 @@ export function Intake({ onSubmit, isProcessing, loadSample }: Props) {
           <CornerMark className="bottom-2 right-2 rotate-180" />
         </div>
 
-        <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-8 text-sm">
+        <PlaybookControl
+          custom={customPlaybook}
+          onPick={() => playbookInputRef.current?.click()}
+          onClear={() => {
+            setCustomPlaybook(null);
+            setPlaybookError(null);
+          }}
+          error={playbookError}
+        />
+        <input
+          ref={playbookInputRef}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (file) await readPlaybook(file);
+            e.target.value = "";
+          }}
+        />
+
+        <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-8 text-sm">
           <Pillar n="I" title="Read">
             The document is ingested and laid out for examination, line by line.
           </Pillar>
@@ -136,6 +190,63 @@ export function Intake({ onSubmit, isProcessing, loadSample }: Props) {
         </div>
       </motion.div>
     </section>
+  );
+}
+
+function PlaybookControl({
+  custom,
+  onPick,
+  onClear,
+  error,
+}: {
+  custom: CustomPlaybook | null;
+  onPick: () => void;
+  onClear: () => void;
+  error: string | null;
+}) {
+  return (
+    <div className="mt-6 px-1">
+      <div className="flex flex-wrap items-center justify-between gap-3 text-[12px]">
+        <div className="flex items-baseline gap-3">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-tobacco">
+            Playbook
+          </span>
+          {custom ? (
+            <span className="text-ink">
+              <span className="font-mono">{custom.name}</span>{" "}
+              <span className="text-muted italic">
+                · {custom.clauseCount} {custom.clauseCount === 1 ? "clause" : "clauses"}
+              </span>
+            </span>
+          ) : (
+            <span className="text-ink">
+              Bundled <span className="text-muted italic">· 16-clause NDA standard</span>
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          {custom && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="font-mono text-[10px] uppercase tracking-widest text-muted hover:text-redline transition-colors"
+            >
+              ✕ Use bundled
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onPick}
+            className="font-mono text-[10px] uppercase tracking-widest text-ink underline-offset-4 hover:underline hover:text-redline transition-colors"
+          >
+            {custom ? "Replace" : "Upload your own (.json)"}
+          </button>
+        </div>
+      </div>
+      {error && (
+        <p className="mt-2 text-xs italic text-redline">{error}</p>
+      )}
+    </div>
   );
 }
 

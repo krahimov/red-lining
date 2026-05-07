@@ -14,6 +14,7 @@ type Props = {
   document: string;
   documentName: string;
   redlines: Redline[];
+  playbookLabel: string;
 };
 
 function buildSpans(doc: string, redlines: Redline[]): Span[] {
@@ -48,7 +49,7 @@ function buildSpans(doc: string, redlines: Redline[]): Span[] {
   return spans;
 }
 
-export function Reader({ document, documentName, redlines }: Props) {
+export function Reader({ document, documentName, redlines, playbookLabel }: Props) {
   const spans = useMemo(() => buildSpans(document, redlines), [document, redlines]);
   const numbered = useMemo(
     () =>
@@ -61,7 +62,11 @@ export function Reader({ document, documentName, redlines }: Props) {
 
   return (
     <section className="max-w-[1400px] mx-auto px-8 py-12">
-      <DocumentMasthead documentName={documentName} count={numbered.length} />
+      <DocumentMasthead
+        documentName={documentName}
+        count={numbered.length}
+        playbookLabel={playbookLabel}
+      />
 
       <div className="mt-12 grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-12">
         <article className="relative">
@@ -99,7 +104,15 @@ export function Reader({ document, documentName, redlines }: Props) {
   );
 }
 
-function DocumentMasthead({ documentName, count }: { documentName: string; count: number }) {
+function DocumentMasthead({
+  documentName,
+  count,
+  playbookLabel,
+}: {
+  documentName: string;
+  count: number;
+  playbookLabel: string;
+}) {
   return (
     <div className="border-y-2 border-ink py-8 text-center relative">
       <div className="absolute top-2 left-1/2 -translate-x-1/2 w-1 h-1 bg-ink rounded-full" />
@@ -118,13 +131,18 @@ function DocumentMasthead({ documentName, count }: { documentName: string; count
       >
         {count > 0 ? "Findings of the Reviewer" : "No Objections to Raise"}
       </h2>
-      <div className="mt-5 flex items-center justify-center gap-4 text-xs font-mono uppercase tracking-widest text-muted">
+      <div className="mt-5 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs font-mono uppercase tracking-widest text-muted">
         <span>Document</span>
         <span className="text-ink not-italic font-mono normal-case tracking-normal text-sm">
           {documentName}
         </span>
         <span className="text-tobacco">◆</span>
         <span>{count} {count === 1 ? "finding" : "findings"}</span>
+        <span className="text-tobacco">◆</span>
+        <span>Reviewed against</span>
+        <span className="text-ink not-italic font-mono normal-case tracking-normal text-sm">
+          {playbookLabel}
+        </span>
       </div>
     </div>
   );
