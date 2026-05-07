@@ -73,9 +73,12 @@ export async function runRedline(
   model = "claude-sonnet-4-6",
 ): Promise<RedlineResult> {
   const client = new Anthropic({ apiKey });
+  // 8192 gives ~2x headroom over typical output (~3.4k tokens for a 16-clause
+  // playbook). 4096 was too tight: a slightly more verbose run truncates the
+  // JSON mid-string and the parse fails.
   const response = await client.messages.create({
     model,
-    max_tokens: 4096,
+    max_tokens: 8192,
     temperature: 0,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: buildUserPrompt(document, playbook) }],
@@ -86,8 +89,29 @@ export async function runRedline(
     .map((b) => b.text)
     .join("");
 
+  console.log(`[redline] anthropic stop_reason=${response.stop_reason} usage=${JSON.stringify(response.usage)} text_len=${text.length}`);
+
+  if (response.stop_reason === "max_tokens") {
+    throw new Error(
+      "The model's response was cut off at the token limit. Try a shorter document or raise max_tokens.",
+    );
+  }
+
   const fenced = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-  const payload = JSON.parse(fenced ? fenced[1] : text);
+  const toParse = fenced ? fenced[1] : text;
+  let payload: { redlines?: Partial<Redline>[] } | Partial<Redline>[];
+  try {
+    payload = JSON.parse(toParse);
+  } catch {
+    console.error("[redline] JSON parse failed. First 500 chars of response:");
+    console.error(toParse.slice(0, 500));
+    console.error("Last 500 chars:");
+    console.error(toParse.slice(-500));
+    throw new Error(
+      `Model returned invalid JSON (stop_reason=${response.stop_reason}). ` +
+      `First chars: ${toParse.slice(0, 120)}`,
+    );
+  }
   const raw: Partial<Redline>[] = Array.isArray(payload) ? payload : payload.redlines ?? [];
 
   const validClauses = new Set(playbook.map((c) => c.clause));
