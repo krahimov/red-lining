@@ -3,7 +3,7 @@ import { useCallback, useRef, useState } from "react";
 import { motion } from "motion/react";
 
 const SAMPLE_HINT =
-  "Plain-text NDAs only (.txt). Around 500–5,000 words works best.";
+  "Plain-text or RTF NDAs (.txt, .rtf). Around 500-5,000 words works best.";
 
 type Props = {
   onSubmit: (text: string, name: string) => void;
@@ -18,8 +18,12 @@ export function Intake({ onSubmit, isProcessing, loadSample }: Props) {
 
   const readFile = useCallback(async (file: File) => {
     setError(null);
-    if (!file.name.match(/\.(txt|md|text)$/i) && file.type !== "text/plain") {
-      setError(`Plain text only — ${file.name} isn't a .txt file.`);
+    const isAccepted = /\.(txt|md|text|rtf)$/i.test(file.name)
+      || file.type === "text/plain"
+      || file.type === "application/rtf"
+      || file.type === "text/rtf";
+    if (!isAccepted) {
+      setError(`Text or RTF only — ${file.name} isn't supported.`);
       return;
     }
     const text = await file.text();
@@ -96,7 +100,7 @@ export function Intake({ onSubmit, isProcessing, loadSample }: Props) {
             <input
               ref={inputRef}
               type="file"
-              accept=".txt,.md,.text,text/plain"
+              accept=".txt,.md,.text,.rtf,text/plain,application/rtf,text/rtf"
               className="hidden"
               onChange={async (e) => {
                 const file = e.target.files?.[0];

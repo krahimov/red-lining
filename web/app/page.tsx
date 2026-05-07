@@ -41,8 +41,15 @@ export default function Page() {
         const payload = await res.json().catch(() => ({}));
         throw new Error(payload.error ?? `Server returned ${res.status}`);
       }
-      const data = (await res.json()) as { redlines: Redline[] };
-      setSubmission({ document, documentName: name, redlines: data.redlines });
+      const data = (await res.json()) as {
+        redlines: Redline[];
+        sanitizedDocument?: string;
+      };
+      setSubmission({
+        document: data.sanitizedDocument ?? document,
+        documentName: name,
+        redlines: data.redlines,
+      });
       setPhase("results");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
