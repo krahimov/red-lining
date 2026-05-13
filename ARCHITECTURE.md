@@ -39,19 +39,19 @@ Single LLM call. End-to-end flow:
 
 | Step | Where in the file |
 | --- | --- |
-| Load document (auto-strip RTF if needed) | `load_document` + `_strip_rtf` |
-| Load playbook | `load_playbook` |
-| Build the prompt | `SYSTEM_PROMPT` constant + `build_user_prompt` + `_compact_clause` |
-| Pick provider & matching API key | `select_provider_and_key` |
-| Call LLM | `call_llm` → `call_openai` / `call_anthropic` |
-| Parse JSON response | `parse_redlines` (handles models that wrap in ```json fences```) |
-| Validate snippets are in document | `validate_and_clean` |
-| Write `redline_output.json` | `main` |
+| Load document (auto-strip RTF if needed) | [`load_document`](redline.py#L31) + [`_strip_rtf`](redline.py#L39) |
+| Load playbook | [`load_playbook`](redline.py#L66) |
+| Build the prompt | [`SYSTEM_PROMPT`](redline.py#L72) constant + [`build_user_prompt`](redline.py#L108) + [`_compact_clause`](redline.py#L96) |
+| Pick provider & matching API key | [`select_provider_and_key`](redline.py#L140) |
+| Call LLM | [`call_llm`](redline.py#L214) → [`call_openai`](redline.py#L177) / [`call_anthropic`](redline.py#L196) |
+| Parse JSON response | [`parse_redlines`](redline.py#L225) (handles models that wrap in ```json fences```) |
+| Validate snippets are in document | [`validate_and_clean`](redline.py#L237) |
+| Write `redline_output.json` | [`main`](redline.py#L279) |
 
 The two ideas worth knowing in detail:
 
-- **Compact playbook view** (`_compact_clause`): the playbook is ~100 KB; only `clause`, `clause_definition`, `red_flag`, `example_ideal_clause`, `example_fallback_clause`, and `is_required` actually inform the model. Stripping the rest cuts the prompt to ~11k input tokens.
-- **Snippet validator** (`validate_and_clean`): every entry's `text_snippet` has to be a verbatim substring of the document. Drops paraphrased hallucinations *before* anything downstream sees them. This is the single most important guarantee in the file.
+- **Compact playbook view** ([`_compact_clause`](redline.py#L96)): the playbook is ~100 KB; only `clause`, `clause_definition`, `red_flag`, `example_ideal_clause`, `example_fallback_clause`, and `is_required` actually inform the model. Stripping the rest cuts the prompt to ~11k input tokens.
+- **Snippet validator** ([`validate_and_clean`](redline.py#L237)): every entry's `text_snippet` has to be a verbatim substring of the document. Drops paraphrased hallucinations *before* anything downstream sees them. This is the single most important guarantee in the file.
 
 ### [`evaluate.py`](evaluate.py) — evaluation
 
@@ -59,13 +59,13 @@ Compares `redline_output.json` against `expected_output.json`.
 
 | Concern | Where in the file |
 | --- | --- |
-| Normalize text for fair comparison | `normalize` |
-| Snippet similarity (lex + token) | `seq_ratio` + `token_overlap` → `snippet_similarity` |
-| Per-pair score (clause + snippet) | `pair_score` (hyperparams: `CLAUSE_WEIGHT`, `SNIPPET_WEIGHT`, `MATCH_THRESHOLD`) |
-| Greedy matching | `greedy_match` |
-| Fix-quality (lexical default) | `lexical_fix_score` |
-| Fix-quality (LLM-judge mode) | `llm_judge_fix` — gated by `--use-llm-judge` |
-| Report assembly | `build_report` |
+| Normalize text for fair comparison | [`normalize`](evaluate.py#L37) |
+| Snippet similarity (lex + token) | [`seq_ratio`](evaluate.py#L59) + [`token_overlap`](evaluate.py#L64) → [`snippet_similarity`](evaluate.py#L74) |
+| Per-pair score (clause + snippet) | [`pair_score`](evaluate.py#L90) (hyperparams: [`CLAUSE_WEIGHT`](evaluate.py#L85), [`SNIPPET_WEIGHT`](evaluate.py#L86), [`MATCH_THRESHOLD`](evaluate.py#L87)) |
+| Greedy matching | [`greedy_match`](evaluate.py#L98) |
+| Fix-quality (lexical default) | [`lexical_fix_score`](evaluate.py#L127) |
+| Fix-quality (LLM-judge mode) | [`llm_judge_fix`](evaluate.py#L131) — gated by `--use-llm-judge` |
+| Report assembly | [`build_report`](evaluate.py#L175) |
 
 The hybrid score is intentionally simple — `0.5 * clause_match + 0.5 * snippet_similarity` — because every other transformation we added made the matches worse on the held-out cases.
 
@@ -102,14 +102,14 @@ A Next.js 15 app under [`web/`](web/) that wraps the same logic in an editorial 
 [`web/app/api/redline/route.ts`](web/app/api/redline/route.ts) is the only API endpoint. It:
 
 1. Parses the request body (`document`, optional `playbook`).
-2. Detects and strips RTF — calls into [`web/lib/strip-rtf.ts`](web/lib/strip-rtf.ts).
+2. Detects and strips RTF — calls [`isRtf`](web/lib/strip-rtf.ts#L67) + [`stripRtf`](web/lib/strip-rtf.ts#L12).
 3. Checks for `ANTHROPIC_API_KEY` in the environment.
-4. Calls [`web/lib/redline.ts`](web/lib/redline.ts) which is the TypeScript port of `redline.py` (same prompt, same `max_tokens` headroom, same validator).
+4. Calls [`runRedline`](web/lib/redline.ts#L69) in [`web/lib/redline.ts`](web/lib/redline.ts) — the TypeScript port of `redline.py` (same prompt, same `max_tokens` headroom, same validator).
 5. Returns the redlines, anything dropped by the validator, and the *sanitized* document (so the client can render text that matches the snippets the LLM saw).
 
-The prompt itself lives in `SYSTEM_PROMPT` inside [`web/lib/redline.ts`](web/lib/redline.ts) — it's a verbatim copy of the Python version. If you change one, change both. (A shared YAML/JSON config would be cleaner but felt like overkill for a take-home.)
+The prompt itself lives in [`SYSTEM_PROMPT`](web/lib/redline.ts#L4) inside [`web/lib/redline.ts`](web/lib/redline.ts), with [`buildUserPrompt`](web/lib/redline.ts#L36) and [`compactClause`](web/lib/redline.ts#L25) as the equivalents of the Python helpers. It's a verbatim port of the Python version. If you change one, change both. (A shared YAML/JSON config would be cleaner but felt like overkill for a take-home.)
 
-[`web/lib/strip-rtf.ts`](web/lib/strip-rtf.ts) is the TypeScript port of `redline.py::_strip_rtf`, extended to also drop RTF preamble (`\fonttbl`, `\colortbl`, `\stylesheet`), trailing line-continuation backslashes, and runs of blank lines.
+[`web/lib/strip-rtf.ts`](web/lib/strip-rtf.ts) is the TypeScript port of [`redline.py::_strip_rtf`](redline.py#L39), extended to also drop RTF preamble (`\fonttbl`, `\colortbl`, `\stylesheet`), trailing line-continuation backslashes, and runs of blank lines.
 
 [`web/lib/types.ts`](web/lib/types.ts) defines `Redline`, `PlaybookClause`, and the API response shape.
 
@@ -138,7 +138,7 @@ Persistent across phases:
 
 ### The hot spot: [`Reader.tsx`](web/components/Reader.tsx)
 
-`buildSpans` (line ~20) is where the document is interleaved with redlined runs. It:
+[`buildSpans`](web/components/Reader.tsx#L20) is where the document is interleaved with redlined runs. It:
 
 1. Finds the first occurrence of each `text_snippet` in the document.
 2. Sorts placements by position.
@@ -164,12 +164,12 @@ The redline underline animation is CSS-only — see `.ink-underline.animate` in 
 
 | Concept | CLI location | Web location |
 | --- | --- | --- |
-| System prompt | `redline.py::SYSTEM_PROMPT` | `web/lib/redline.ts::SYSTEM_PROMPT` |
-| User prompt builder | `redline.py::build_user_prompt` | `web/lib/redline.ts::buildUserPrompt` |
-| Compact playbook | `redline.py::_compact_clause` | `web/lib/redline.ts::compactClause` |
-| RTF stripper | `redline.py::_strip_rtf` | `web/lib/strip-rtf.ts::stripRtf` |
-| Snippet validator | `redline.py::validate_and_clean` | `web/lib/redline.ts::runRedline` (inline) |
-| Playbook data | `playbook.json` (root) | `web/lib/playbook.json` (copy) |
+| System prompt | [`SYSTEM_PROMPT`](redline.py#L72) | [`SYSTEM_PROMPT`](web/lib/redline.ts#L4) |
+| User prompt builder | [`build_user_prompt`](redline.py#L108) | [`buildUserPrompt`](web/lib/redline.ts#L36) |
+| Compact playbook | [`_compact_clause`](redline.py#L96) | [`compactClause`](web/lib/redline.ts#L25) |
+| RTF stripper | [`_strip_rtf`](redline.py#L39) | [`stripRtf`](web/lib/strip-rtf.ts#L12) |
+| Snippet validator | [`validate_and_clean`](redline.py#L237) | [`runRedline`](web/lib/redline.ts#L69) (inline) |
+| Playbook data | [`playbook.json`](playbook.json) (root) | [`web/lib/playbook.json`](web/lib/playbook.json) (copy) |
 
 If you ever change the prompt or validator logic, **change both**. The duplication is intentional — having the CLI deliverable run with zero dependencies was worth more than DRY for this scope.
 
