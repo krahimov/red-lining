@@ -9,3 +9,9 @@ __pycache__/
 node_modules/
 .next/
 .vercel
+
+# Personal — not for the repo
+interview_prep.html
+
+# Claude Code session metadata
+.claude/
