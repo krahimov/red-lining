@@ -41,18 +41,18 @@ Single LLM call. End-to-end flow:
 | --- | --- |
 | Load document (auto-strip RTF if needed) | [`load_document`](redline.py) + [`_strip_rtf`](redline.py) |
 | Load + validate playbook (Pydantic) | [`load_playbook`](schemas.py) → returns `list[PlaybookClause]` |
-| Build the prompt | [`SYSTEM_PROMPT`](redline.py) constant + [`build_user_prompt`](redline.py) + [`PlaybookClause.to_compact_view`](schemas.py) |
-| Pick provider & matching API key | [`select_provider_and_key`](redline.py) |
-| Call LLM | [`call_llm`](redline.py) → [`call_openai`](redline.py) / [`call_anthropic`](redline.py) |
-| Parse + structurally validate (Pydantic) | [`parse_redlines`](redline.py) → returns `list[Redline]` via [`RedlineResponse`](schemas.py) |
+| Build the prompt | [`SYSTEM_PROMPT`](redline.py) + [`build_user_prompt`](redline.py) + [`PlaybookClause.to_compact_view`](schemas.py) |
+| Pick provider (env-var auto-detection) | [`select_provider`](redline.py) |
+| Build Pydantic AI agent (schema-enforced + auto-retry) | [`build_agent`](redline.py) |
+| Run the agent (one call, returns validated `RedlineResponse`) | `agent.run_sync(...)` in [`main`](redline.py) |
 | Domain-validate (snippet in document, known clause) | [`validate_redlines`](redline.py) |
 | Write `redline_output.json` | [`main`](redline.py) |
 
 The two ideas worth knowing in detail:
 
 - **Compact playbook view** ([`PlaybookClause.to_compact_view`](schemas.py)): the playbook is ~100 KB; only six fields actually inform the model. Stripping the rest cuts the prompt to ~11k input tokens.
-- **Snippet validator** ([`validate_redlines`](redline.py)): every entry's `text_snippet` has to be a verbatim substring of the document. Drops paraphrased hallucinations *before* anything downstream sees them. This is the single most important guarantee in the file.
-- **Pydantic boundary models** ([`schemas.py`](schemas.py)): one source of truth for the playbook shape, the LLM response shape, and the evaluation input shape. Each boundary fails loudly with a clear error if the data is malformed.
+- **Snippet validator** ([`validate_redlines`](redline.py)): every entry's `text_snippet` has to be a verbatim substring of the document. Drops paraphrased hallucinations *before* anything downstream sees them. Pydantic AI guarantees the *shape* is right; this validator guarantees the *content* is grounded in the source.
+- **Pydantic AI agent** ([`build_agent`](redline.py)): one `Agent(output_type=RedlineResponse, output_retries=2)` replaces ~80 lines of manual SDK wiring. Provider abstraction (Anthropic ↔ OpenAI) is a model-id string. Structured output is enforced at the API level (tool-use / response_format). If validation fails, the framework feeds the error back to the model and retries — a failure mode our previous code could only detect and drop.
 
 ### [`evaluate.py`](evaluate.py) — evaluation
 
@@ -84,7 +84,7 @@ Plus `load_playbook(path)` / `load_redlines(path)` helpers that validate at the 
 
 ### [`requirements.txt`](requirements.txt)
 
-Three deps: the two SDKs (pick the one matching your API key) and Pydantic v2.
+One dep: `pydantic-ai`. It brings its own pinned versions of `pydantic`, `anthropic`, and `openai`, so we get the whole stack from a single line.
 
 ---
 
@@ -181,9 +181,11 @@ The redline underline animation is CSS-only — see `.ink-underline.animate` in 
 | User prompt builder | [`build_user_prompt`](redline.py) | [`buildUserPrompt`](web/lib/redline.ts) |
 | Compact playbook | [`PlaybookClause.to_compact_view`](schemas.py) | [`compactClause`](web/lib/redline.ts) |
 | Output schema | [`Redline` + `RedlineResponse`](schemas.py) (Pydantic) | [`Redline`](web/lib/types.ts) (TS type) |
-| RTF stripper | [`_strip_rtf`](redline.py) | [`stripRtf`](web/lib/strip-rtf.ts) |
-| Snippet validator | [`validate_redlines`](redline.py) | [`runRedline`](web/lib/redline.ts) (inline) |
+| LLM call | [`build_agent`](redline.py) (Pydantic AI) | manual Anthropic SDK in [`runRedline`](web/lib/redline.ts) |
+| Snippet validator | [`validate_redlines`](redline.py) | inline in [`runRedline`](web/lib/redline.ts) |
 | Playbook data | [`playbook.json`](playbook.json) (root) | [`web/lib/playbook.json`](web/lib/playbook.json) (copy) |
+
+**Why two LLM-call styles?** The CLI uses Pydantic AI (less code, auto-retry on validation failure, picks the right tool for the job). The web app uses the raw Anthropic SDK (one fewer dependency layer, finer control over `max_tokens` and stop reasons). Both produce the same `Redline` shape.
 
 If you ever change the prompt or validator logic, **change both**. The duplication is intentional — having the CLI deliverable run with zero dependencies was worth more than DRY for this scope.
 

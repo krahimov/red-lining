@@ -1,18 +1,26 @@
 """
 NDA Redlining Script.
 
-Loads a document and a playbook, then uses an LLM to detect clauses in the
-document that violate the playbook's red flags. Emits a JSON list of issues
-with exact text snippets, the playbook clause they violate, and a suggested
-fix grounded in the playbook's ideal/fallback example.
+Loads a document and a playbook, then uses an LLM (via Pydantic AI) to detect
+clauses in the document that violate the playbook's red flags. Emits a JSON
+list of issues with exact text snippets, the playbook clause they violate,
+and a suggested fix grounded in the playbook's ideal/fallback example.
 
 Usage:
-    export OPENAI_API_KEY=...     (or ANTHROPIC_API_KEY=...)
+    export ANTHROPIC_API_KEY=...     (or OPENAI_API_KEY=...)
     python redline.py --document bad_document.txt --playbook playbook.json \
                       --output redline_output.json
 
-The provider is auto-detected from the API key prefix (sk-ant-... -> Anthropic,
-sk-... -> OpenAI). Override with --provider {openai,anthropic} if needed.
+The provider is auto-detected from which env var is set. Override with
+--provider {openai,anthropic} if needed.
+
+Pydantic AI handles three things for us that we previously did by hand:
+  1. Provider abstraction -- one model-id string picks Anthropic vs OpenAI.
+  2. Schema-enforced output -- the agent forces tool-use / response_format
+     so the model can't return a malformed shape.
+  3. Automatic retry on validation failure -- if the model's first attempt
+     fails Pydantic validation, the validation error is fed back and the
+     model corrects itself (up to `retries` times).
 """
 
 from __future__ import annotations  # PEP 563: keeps `str | None` etc. valid on 3.8+
@@ -25,6 +33,8 @@ import sys
 from pathlib import Path
 
 from pydantic import ValidationError
+from pydantic_ai import Agent
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 
 from schemas import PlaybookClause, Redline, RedlineResponse, load_playbook
 
@@ -125,123 +135,69 @@ Output schema:
 Output ONLY the JSON object."""
 
 
-# ---------- LLM calls ----------
+# ---------- LLM agent (Pydantic AI) ----------
 
-def select_provider_and_key(cli_key: str | None,
-                            override: str | None) -> tuple[str, str | None]:
-    """Pick provider and the matching API key.
-
-    Order of resolution:
-    1. --provider flag forces the provider; the key comes from --api-key or
-       the matching env var.
-    2. --api-key without --provider: infer provider from the key prefix.
-    3. No flags: prefer Anthropic if ANTHROPIC_API_KEY is set, else OpenAI if
-       OPENAI_API_KEY is set, else Anthropic with no key (will error).
-
-    The previous implementation picked whichever env var was non-empty *first*
-    and then routed by env presence, which let a leftover OPENAI_API_KEY get
-    sent to Anthropic. Selecting provider before key avoids that.
-    """
+def select_provider(cli_key: str | None, override: str | None) -> str:
+    """Pick the provider. Pydantic AI reads the matching env var itself."""
     if override:
-        provider = override
-    elif cli_key and cli_key.startswith("sk-ant-"):
-        provider = "anthropic"
-    elif cli_key and cli_key.startswith(("sk-proj-", "sk-")):
-        provider = "openai"
-    elif os.environ.get("ANTHROPIC_API_KEY"):
-        provider = "anthropic"
-    elif os.environ.get("OPENAI_API_KEY"):
-        provider = "openai"
-    else:
-        provider = "anthropic"
-
-    if cli_key:
-        api_key = cli_key
-    elif provider == "anthropic":
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-    else:
-        api_key = os.environ.get("OPENAI_API_KEY")
-    return provider, api_key
+        return override
+    if cli_key and cli_key.startswith("sk-ant-"):
+        return "anthropic"
+    if cli_key and cli_key.startswith(("sk-proj-", "sk-")):
+        return "openai"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    if os.environ.get("OPENAI_API_KEY"):
+        return "openai"
+    return "anthropic"  # last-resort default, will error if no key
 
 
-def call_openai(system: str, user: str, model: str, api_key: str) -> str:
-    try:
-        from openai import OpenAI
-    except ImportError as e:
-        raise SystemExit("openai package not installed. pip install openai") from e
-
-    client = OpenAI(api_key=api_key)
-    resp = client.chat.completions.create(
-        model=model,
-        temperature=0,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
-    return resp.choices[0].message.content
+DEFAULT_MODELS = {
+    "anthropic": "claude-sonnet-4-6",
+    "openai": "gpt-4o-2024-08-06",
+}
 
 
-def call_anthropic(system: str, user: str, model: str, api_key: str) -> str:
-    try:
-        import anthropic
-    except ImportError as e:
-        raise SystemExit("anthropic package not installed. pip install anthropic") from e
+def build_agent(provider: str, model: str | None,
+                api_key: str | None) -> Agent[None, RedlineResponse]:
+    """Construct a Pydantic AI agent that returns a validated RedlineResponse.
 
-    client = anthropic.Anthropic(api_key=api_key)
-    # 8192 gives ~2x headroom over typical output (~3.4k tokens for a 16-clause
-    # playbook). 4096 was too tight: a slightly more verbose run truncates the
-    # JSON mid-string and the parse fails.
-    resp = client.messages.create(
-        model=model,
-        max_tokens=8192,
-        temperature=0,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    if resp.stop_reason == "max_tokens":
-        raise RuntimeError(
-            "Model response was cut off at the token limit. Raise max_tokens or "
-            "shorten the document."
-        )
-    # Anthropic returns a list of content blocks
-    return "".join(block.text for block in resp.content if block.type == "text")
-
-
-def call_llm(system: str, user: str, provider: str, model: str | None,
-             api_key: str) -> str:
-    if provider == "openai":
-        return call_openai(system, user, model or "gpt-4o-2024-08-06", api_key)
-    if provider == "anthropic":
-        return call_anthropic(system, user, model or "claude-sonnet-4-6", api_key)
-    raise ValueError(f"Unknown provider: {provider}")
-
-
-# ---------- Response parsing & validation ----------
-
-def parse_redlines(raw: str) -> list[Redline]:
-    """Parse and structurally validate the model's JSON response.
-
-    Pydantic enforces the spec shape (three required string fields per entry).
-    Domain checks -- snippet appears in source, clause name is known -- happen
-    in validate_redlines below, because they need the document and playbook.
+    `output_type=RedlineResponse` tells the agent to force structured output
+    (Anthropic tool-use / OpenAI response_format) and run Pydantic validation
+    on the result. `retries=2` means a validation failure is fed back to the
+    model so it can self-correct -- exactly the failure mode our previous
+    manual implementation could only detect and drop.
     """
-    # Try the plain body first; fall back to fenced JSON if the model wrapped it.
-    text = raw.strip()
-    try:
-        return RedlineResponse.model_validate_json(text).redlines
-    except (json.JSONDecodeError, ValidationError):
-        pass
-    fenced = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text)
-    if fenced:
-        return RedlineResponse.model_validate_json(fenced.group(1)).redlines
-    # Last resort: maybe the model returned a bare array instead of {"redlines": [...]}.
-    data = json.loads(text)
-    if isinstance(data, list):
-        return [Redline.model_validate(r) for r in data]
-    raise ValueError("Could not extract a list of redlines from the model response.")
+    model_name = model or DEFAULT_MODELS[provider]
 
+    if api_key:
+        # Build a model object with an explicit provider so we can inject the
+        # CLI-supplied key without relying on env vars.
+        if provider == "anthropic":
+            from pydantic_ai.models.anthropic import AnthropicModel
+            from pydantic_ai.providers.anthropic import AnthropicProvider
+            model_obj = AnthropicModel(model_name, provider=AnthropicProvider(api_key=api_key))
+        else:
+            from pydantic_ai.models.openai import OpenAIModel
+            from pydantic_ai.providers.openai import OpenAIProvider
+            model_obj = OpenAIModel(model_name, provider=OpenAIProvider(api_key=api_key))
+        return Agent(
+            model_obj,
+            output_type=RedlineResponse,
+            system_prompt=SYSTEM_PROMPT,
+            output_retries=2,
+        )
+
+    # No explicit key -- let Pydantic AI read ANTHROPIC_API_KEY / OPENAI_API_KEY.
+    return Agent(
+        f"{provider}:{model_name}",
+        output_type=RedlineResponse,
+        system_prompt=SYSTEM_PROMPT,
+        output_retries=2,
+    )
+
+
+# ---------- Domain validation ----------
 
 def validate_redlines(redlines: list[Redline], document: str,
                       playbook: list[PlaybookClause]) -> list[Redline]:
@@ -290,9 +246,12 @@ def main():
                     help="Override env-var API key")
     args = ap.parse_args()
 
-    provider, api_key = select_provider_and_key(args.api_key, args.provider)
-    if not api_key:
-        sys.exit("No API key. Set ANTHROPIC_API_KEY (or OPENAI_API_KEY), or pass --api-key.")
+    provider = select_provider(args.api_key, args.provider)
+    if not args.api_key and not os.environ.get(f"{provider.upper()}_API_KEY"):
+        sys.exit(
+            f"No API key. Set {provider.upper()}_API_KEY (or the other provider's "
+            "key), or pass --api-key."
+        )
 
     document = load_document(args.document)
     try:
@@ -300,17 +259,19 @@ def main():
     except (ValidationError, ValueError) as e:
         sys.exit(f"Playbook validation failed: {e}")
 
-    system = SYSTEM_PROMPT
     user = build_user_prompt(document, playbook)
+    agent = build_agent(provider, args.model, args.api_key)
 
-    print(f"[info] provider={provider} model={args.model or 'default'} clauses={len(playbook)}")
-    raw = call_llm(system, user, provider, args.model, api_key)
-
+    print(f"[info] provider={provider} model={args.model or DEFAULT_MODELS[provider]} clauses={len(playbook)}")
     try:
-        redlines = parse_redlines(raw)
-    except (ValidationError, json.JSONDecodeError, ValueError) as e:
-        sys.exit(f"Model response failed validation: {e}")
-    redlines = validate_redlines(redlines, document, playbook)
+        result = agent.run_sync(user)
+    except UnexpectedModelBehavior as e:
+        sys.exit(
+            f"Model returned malformed output even after retries: {e}. "
+            "Try raising max_tokens, simplifying the playbook, or shortening the document."
+        )
+
+    redlines = validate_redlines(result.output.redlines, document, playbook)
 
     output = [r.model_dump() for r in redlines]
     Path(args.output).write_text(json.dumps(output, indent=2, ensure_ascii=False))

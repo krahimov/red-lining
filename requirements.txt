@@ -1,9 +1,5 @@
-# Pick the SDK that matches your provided API key.
-# OpenAI keys (sk-...) -> openai
-# Anthropic keys (sk-ant-...) -> anthropic
-openai>=1.40.0
-anthropic>=0.34.0
-
-# Pydantic gives us a single source of truth for the schema across the
-# playbook input, the LLM output, and the evaluation inputs.
-pydantic>=2.0
+# Pydantic AI handles structured LLM output end-to-end: provider abstraction,
+# response_format/tool-use under the hood, automatic retry on validation
+# failure (the model sees the validation error and corrects itself). Brings
+# its own pinned versions of pydantic, anthropic, and openai.
+pydantic-ai>=0.0.20
