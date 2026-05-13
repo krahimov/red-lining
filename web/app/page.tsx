@@ -118,7 +118,15 @@ export default function Page() {
               <div className="diamond-divider mb-6">
                 <span className="font-display text-tobacco">◆ ◆ ◆</span>
               </div>
-              <div className="text-center">
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => downloadRedlineJson(submission)}
+                  className="bg-ink text-parchment px-6 py-3 rounded-sm font-mono text-xs uppercase tracking-widest hover:bg-redline transition-colors"
+                  title="Download the spec-compliant redline_output.json"
+                >
+                  ↓ Download redline_output.json
+                </button>
                 <button
                   type="button"
                   onClick={reset}
@@ -182,4 +190,18 @@ function useCaseNumber(name?: string): string {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
   return String(h).padStart(4, "0").slice(0, 4) + "-A";
+}
+
+function downloadRedlineJson(submission: Submission) {
+  // Spec-compliant shape: top-level array of {text_snippet, playbook_clause_reference, suggested_fix}.
+  const body = JSON.stringify(submission.redlines, null, 2);
+  const blob = new Blob([body], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "redline_output.json";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }

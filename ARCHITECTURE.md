@@ -39,19 +39,20 @@ Single LLM call. End-to-end flow:
 
 | Step | Where in the file |
 | --- | --- |
-| Load document (auto-strip RTF if needed) | [`load_document`](redline.py#L31) + [`_strip_rtf`](redline.py#L39) |
-| Load playbook | [`load_playbook`](redline.py#L66) |
-| Build the prompt | [`SYSTEM_PROMPT`](redline.py#L72) constant + [`build_user_prompt`](redline.py#L108) + [`_compact_clause`](redline.py#L96) |
-| Pick provider & matching API key | [`select_provider_and_key`](redline.py#L140) |
-| Call LLM | [`call_llm`](redline.py#L214) → [`call_openai`](redline.py#L177) / [`call_anthropic`](redline.py#L196) |
-| Parse JSON response | [`parse_redlines`](redline.py#L225) (handles models that wrap in ```json fences```) |
-| Validate snippets are in document | [`validate_and_clean`](redline.py#L237) |
-| Write `redline_output.json` | [`main`](redline.py#L279) |
+| Load document (auto-strip RTF if needed) | [`load_document`](redline.py) + [`_strip_rtf`](redline.py) |
+| Load + validate playbook (Pydantic) | [`load_playbook`](schemas.py) → returns `list[PlaybookClause]` |
+| Build the prompt | [`SYSTEM_PROMPT`](redline.py) constant + [`build_user_prompt`](redline.py) + [`PlaybookClause.to_compact_view`](schemas.py) |
+| Pick provider & matching API key | [`select_provider_and_key`](redline.py) |
+| Call LLM | [`call_llm`](redline.py) → [`call_openai`](redline.py) / [`call_anthropic`](redline.py) |
+| Parse + structurally validate (Pydantic) | [`parse_redlines`](redline.py) → returns `list[Redline]` via [`RedlineResponse`](schemas.py) |
+| Domain-validate (snippet in document, known clause) | [`validate_redlines`](redline.py) |
+| Write `redline_output.json` | [`main`](redline.py) |
 
 The two ideas worth knowing in detail:
 
-- **Compact playbook view** ([`_compact_clause`](redline.py#L96)): the playbook is ~100 KB; only `clause`, `clause_definition`, `red_flag`, `example_ideal_clause`, `example_fallback_clause`, and `is_required` actually inform the model. Stripping the rest cuts the prompt to ~11k input tokens.
-- **Snippet validator** ([`validate_and_clean`](redline.py#L237)): every entry's `text_snippet` has to be a verbatim substring of the document. Drops paraphrased hallucinations *before* anything downstream sees them. This is the single most important guarantee in the file.
+- **Compact playbook view** ([`PlaybookClause.to_compact_view`](schemas.py)): the playbook is ~100 KB; only six fields actually inform the model. Stripping the rest cuts the prompt to ~11k input tokens.
+- **Snippet validator** ([`validate_redlines`](redline.py)): every entry's `text_snippet` has to be a verbatim substring of the document. Drops paraphrased hallucinations *before* anything downstream sees them. This is the single most important guarantee in the file.
+- **Pydantic boundary models** ([`schemas.py`](schemas.py)): one source of truth for the playbook shape, the LLM response shape, and the evaluation input shape. Each boundary fails loudly with a clear error if the data is malformed.
 
 ### [`evaluate.py`](evaluate.py) — evaluation
 
@@ -69,9 +70,21 @@ Compares `redline_output.json` against `expected_output.json`.
 
 The hybrid score is intentionally simple — `0.5 * clause_match + 0.5 * snippet_similarity` — because every other transformation we added made the matches worse on the held-out cases.
 
+### [`schemas.py`](schemas.py)
+
+Three Pydantic models that define the typed boundaries of the pipeline:
+
+| Model | What it shapes |
+| --- | --- |
+| `PlaybookClause` | one entry in `playbook.json`; tolerates extra fields, exposes `to_compact_view()` for the prompt |
+| `Redline` | one finding — the exact spec output shape, with whitespace trimmed on every field |
+| `RedlineResponse` | the top-level `{"redlines": [...]}` object the model returns |
+
+Plus `load_playbook(path)` / `load_redlines(path)` helpers that validate at the input boundary. If a playbook is malformed or the model returns garbage, the failure happens here with a clear Pydantic error message — not deep inside the matching loop.
+
 ### [`requirements.txt`](requirements.txt)
 
-Two SDKs, nothing else. Pick the one matching your API key.
+Three deps: the two SDKs (pick the one matching your API key) and Pydantic v2.
 
 ---
 
@@ -164,11 +177,12 @@ The redline underline animation is CSS-only — see `.ink-underline.animate` in 
 
 | Concept | CLI location | Web location |
 | --- | --- | --- |
-| System prompt | [`SYSTEM_PROMPT`](redline.py#L72) | [`SYSTEM_PROMPT`](web/lib/redline.ts#L4) |
-| User prompt builder | [`build_user_prompt`](redline.py#L108) | [`buildUserPrompt`](web/lib/redline.ts#L36) |
-| Compact playbook | [`_compact_clause`](redline.py#L96) | [`compactClause`](web/lib/redline.ts#L25) |
-| RTF stripper | [`_strip_rtf`](redline.py#L39) | [`stripRtf`](web/lib/strip-rtf.ts#L12) |
-| Snippet validator | [`validate_and_clean`](redline.py#L237) | [`runRedline`](web/lib/redline.ts#L69) (inline) |
+| System prompt | [`SYSTEM_PROMPT`](redline.py) | [`SYSTEM_PROMPT`](web/lib/redline.ts) |
+| User prompt builder | [`build_user_prompt`](redline.py) | [`buildUserPrompt`](web/lib/redline.ts) |
+| Compact playbook | [`PlaybookClause.to_compact_view`](schemas.py) | [`compactClause`](web/lib/redline.ts) |
+| Output schema | [`Redline` + `RedlineResponse`](schemas.py) (Pydantic) | [`Redline`](web/lib/types.ts) (TS type) |
+| RTF stripper | [`_strip_rtf`](redline.py) | [`stripRtf`](web/lib/strip-rtf.ts) |
+| Snippet validator | [`validate_redlines`](redline.py) | [`runRedline`](web/lib/redline.ts) (inline) |
 | Playbook data | [`playbook.json`](playbook.json) (root) | [`web/lib/playbook.json`](web/lib/playbook.json) (copy) |
 
 If you ever change the prompt or validator logic, **change both**. The duplication is intentional — having the CLI deliverable run with zero dependencies was worth more than DRY for this scope.

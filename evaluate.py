@@ -25,13 +25,17 @@ import sys
 import os
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any
+
+from pydantic import ValidationError
+
+from schemas import Redline, load_redlines
 
 
 # ---------- Loading & normalization ----------
 
-def load_json(path: str) -> list[dict]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+# load_redlines is imported from schemas.py -- runs Pydantic validation at
+# the input boundary, so malformed predicted/expected files fail loudly here
+# instead of crashing inside the matching loop.
 
 
 def normalize(text: str) -> str:
@@ -87,15 +91,13 @@ SNIPPET_WEIGHT = 0.5
 MATCH_THRESHOLD = 0.55  # combined score required to count as a match
 
 
-def pair_score(pred: dict, exp: dict) -> float:
-    clause_match = 1.0 if pred.get("playbook_clause_reference", "").strip() \
-        == exp.get("playbook_clause_reference", "").strip() else 0.0
-    snippet = snippet_similarity(pred.get("text_snippet", ""),
-                                 exp.get("text_snippet", ""))
+def pair_score(pred: Redline, exp: Redline) -> float:
+    clause_match = 1.0 if pred.playbook_clause_reference == exp.playbook_clause_reference else 0.0
+    snippet = snippet_similarity(pred.text_snippet, exp.text_snippet)
     return CLAUSE_WEIGHT * clause_match + SNIPPET_WEIGHT * snippet
 
 
-def greedy_match(predicted: list[dict], expected: list[dict]) -> tuple[
+def greedy_match(predicted: list[Redline], expected: list[Redline]) -> tuple[
         list[tuple[int, int, float]], set[int], set[int]]:
     """Greedy assignment: highest-scoring pairs first, no double-matching.
 
@@ -172,7 +174,7 @@ def llm_judge_fix(pred_fix: str, exp_fix: str, clause: str,
 
 # ---------- Reporting ----------
 
-def build_report(predicted: list[dict], expected: list[dict],
+def build_report(predicted: list[Redline], expected: list[Redline],
                  matches: list[tuple[int, int, float]],
                  unmatched_pred: set[int], unmatched_exp: set[int],
                  fix_scores: list[float]) -> str:
@@ -206,11 +208,11 @@ def build_report(predicted: list[dict], expected: list[dict],
     lines.append("Per-clause detection breakdown:")
     clause_stats: dict[str, dict[str, int]] = {}
     for e in expected:
-        c = e.get("playbook_clause_reference", "?")
+        c = e.playbook_clause_reference
         clause_stats.setdefault(c, {"expected": 0, "matched": 0})
         clause_stats[c]["expected"] += 1
     for i, j, _ in matches:
-        c = expected[j].get("playbook_clause_reference", "?")
+        c = expected[j].playbook_clause_reference
         clause_stats[c]["matched"] += 1
     for c, st in sorted(clause_stats.items()):
         lines.append(f"  {c:<40s} {st['matched']}/{st['expected']}")
@@ -220,26 +222,25 @@ def build_report(predicted: list[dict], expected: list[dict],
         lines.append("Matched pairs (sorted by combined score):")
         for i, j, score in sorted(matches, key=lambda x: -x[2]):
             p, e = predicted[i], expected[j]
-            fix_sim = lexical_fix_score(p.get("suggested_fix", ""),
-                                        e.get("suggested_fix", ""))
-            lines.append(f"  - clause: {e['playbook_clause_reference']}")
+            fix_sim = lexical_fix_score(p.suggested_fix, e.suggested_fix)
+            lines.append(f"  - clause: {e.playbook_clause_reference}")
             lines.append(f"    pair score: {score:.3f}  fix lexical sim: {fix_sim:.3f}")
-            lines.append(f"    expected snippet: {_short(e['text_snippet'])}")
-            lines.append(f"    predicted snippet: {_short(p['text_snippet'])}")
+            lines.append(f"    expected snippet: {_short(e.text_snippet)}")
+            lines.append(f"    predicted snippet: {_short(p.text_snippet)}")
             lines.append("")
 
     if unmatched_exp:
         lines.append("Missed (expected but not predicted):")
         for j in unmatched_exp:
             e = expected[j]
-            lines.append(f"  - {e['playbook_clause_reference']}: {_short(e['text_snippet'])}")
+            lines.append(f"  - {e.playbook_clause_reference}: {_short(e.text_snippet)}")
         lines.append("")
 
     if unmatched_pred:
         lines.append("Spurious (predicted but not expected):")
         for i in unmatched_pred:
             p = predicted[i]
-            lines.append(f"  - {p['playbook_clause_reference']}: {_short(p['text_snippet'])}")
+            lines.append(f"  - {p.playbook_clause_reference}: {_short(p.text_snippet)}")
         lines.append("")
 
     return "\n".join(lines)
@@ -264,8 +265,11 @@ def main():
     ap.add_argument("--api-key", default=None)
     args = ap.parse_args()
 
-    predicted = load_json(args.predicted)
-    expected = load_json(args.expected)
+    try:
+        predicted = load_redlines(args.predicted)
+        expected = load_redlines(args.expected)
+    except (ValidationError, ValueError) as e:
+        sys.exit(f"Input validation failed: {e}")
 
     matches, unmatched_pred, unmatched_exp = greedy_match(predicted, expected)
 
@@ -293,16 +297,16 @@ def main():
             sys.exit("--use-llm-judge requires ANTHROPIC_API_KEY (or OPENAI_API_KEY).")
         for i, j, _ in matches:
             fix_scores.append(llm_judge_fix(
-                predicted[i].get("suggested_fix", ""),
-                expected[j].get("suggested_fix", ""),
-                expected[j].get("playbook_clause_reference", ""),
+                predicted[i].suggested_fix,
+                expected[j].suggested_fix,
+                expected[j].playbook_clause_reference,
                 api_key, provider, args.model,
             ))
     else:
         for i, j, _ in matches:
             fix_scores.append(lexical_fix_score(
-                predicted[i].get("suggested_fix", ""),
-                expected[j].get("suggested_fix", ""),
+                predicted[i].suggested_fix,
+                expected[j].suggested_fix,
             ))
 
     report = build_report(predicted, expected, matches,

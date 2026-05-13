@@ -23,7 +23,10 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+
+from pydantic import ValidationError
+
+from schemas import PlaybookClause, Redline, RedlineResponse, load_playbook
 
 
 # ---------- I/O helpers ----------
@@ -63,8 +66,7 @@ def _strip_rtf(rtf: str) -> str:
     return rtf
 
 
-def load_playbook(path: str) -> list[dict]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+# load_playbook is imported from schemas.py -- returns validated PlaybookClause models.
 
 
 # ---------- Prompt construction ----------
@@ -93,20 +95,8 @@ clause, do not include it.
 7. Output ONLY a JSON object of the form {"redlines": [ ... ]} with no other text."""
 
 
-def _compact_clause(clause: dict) -> dict:
-    """Trim the playbook entry to fields the model actually needs."""
-    return {
-        "clause": clause["clause"],
-        "definition": clause.get("clause_definition", ""),
-        "red_flags": clause.get("red_flag", ""),
-        "ideal_example": clause.get("example_ideal_clause", ""),
-        "fallback_example": clause.get("example_fallback_clause", ""),
-        "is_required": clause.get("is_required", True),
-    }
-
-
-def build_user_prompt(document: str, playbook: list[dict]) -> str:
-    compact = [_compact_clause(c) for c in playbook]
+def build_user_prompt(document: str, playbook: list[PlaybookClause]) -> str:
+    compact = [c.to_compact_view() for c in playbook]
     playbook_block = json.dumps(compact, indent=2, ensure_ascii=False)
 
     return f"""Review the DOCUMENT below against the PLAYBOOK. Return every \
@@ -200,13 +190,21 @@ def call_anthropic(system: str, user: str, model: str, api_key: str) -> str:
         raise SystemExit("anthropic package not installed. pip install anthropic") from e
 
     client = anthropic.Anthropic(api_key=api_key)
+    # 8192 gives ~2x headroom over typical output (~3.4k tokens for a 16-clause
+    # playbook). 4096 was too tight: a slightly more verbose run truncates the
+    # JSON mid-string and the parse fails.
     resp = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=8192,
         temperature=0,
         system=system,
         messages=[{"role": "user", "content": user}],
     )
+    if resp.stop_reason == "max_tokens":
+        raise RuntimeError(
+            "Model response was cut off at the token limit. Raise max_tokens or "
+            "shorten the document."
+        )
     # Anthropic returns a list of content blocks
     return "".join(block.text for block in resp.content if block.type == "text")
 
@@ -222,51 +220,55 @@ def call_llm(system: str, user: str, provider: str, model: str | None,
 
 # ---------- Response parsing & validation ----------
 
-def parse_redlines(raw: str) -> list[dict]:
-    # Some models wrap JSON in fences even when asked not to.
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-    if fenced:
-        raw = fenced.group(1)
-    data = json.loads(raw)
-    redlines = data.get("redlines") if isinstance(data, dict) else data
-    if not isinstance(redlines, list):
-        raise ValueError(f"Expected a list of redlines, got: {type(redlines)}")
-    return redlines
+def parse_redlines(raw: str) -> list[Redline]:
+    """Parse and structurally validate the model's JSON response.
 
-
-def validate_and_clean(redlines: list[dict], document: str,
-                       playbook: list[dict]) -> list[dict]:
-    """Drop entries whose snippet doesn't actually appear in the document.
-
-    A common failure mode is the model paraphrasing the snippet. We catch that
-    here so downstream evaluation isn't biased by hallucinated quotes.
+    Pydantic enforces the spec shape (three required string fields per entry).
+    Domain checks -- snippet appears in source, clause name is known -- happen
+    in validate_redlines below, because they need the document and playbook.
     """
-    valid_clauses = {c["clause"] for c in playbook}
-    cleaned, dropped = [], []
+    # Try the plain body first; fall back to fenced JSON if the model wrapped it.
+    text = raw.strip()
+    try:
+        return RedlineResponse.model_validate_json(text).redlines
+    except (json.JSONDecodeError, ValidationError):
+        pass
+    fenced = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text)
+    if fenced:
+        return RedlineResponse.model_validate_json(fenced.group(1)).redlines
+    # Last resort: maybe the model returned a bare array instead of {"redlines": [...]}.
+    data = json.loads(text)
+    if isinstance(data, list):
+        return [Redline.model_validate(r) for r in data]
+    raise ValueError("Could not extract a list of redlines from the model response.")
+
+
+def validate_redlines(redlines: list[Redline], document: str,
+                      playbook: list[PlaybookClause]) -> list[Redline]:
+    """Drop entries that pass Pydantic but fail domain checks.
+
+    Two checks that Pydantic can't enforce without external context:
+    - text_snippet must be a verbatim substring of the document (catches
+      paraphrased hallucinations, our most important integrity guarantee).
+    - playbook_clause_reference must name a real clause in the playbook.
+    """
+    valid_clauses = {c.clause for c in playbook}
     norm_doc = _normalize_ws(document)
-    for entry in redlines:
-        snippet = entry.get("text_snippet", "").strip()
-        clause = entry.get("playbook_clause_reference", "").strip()
-        fix = entry.get("suggested_fix", "").strip()
-        if not snippet or not clause or not fix:
-            dropped.append((entry, "missing field"))
+    cleaned: list[Redline] = []
+    dropped: list[tuple[Redline, str]] = []
+    for r in redlines:
+        if r.playbook_clause_reference not in valid_clauses:
+            dropped.append((r, f"unknown clause: {r.playbook_clause_reference}"))
             continue
-        if clause not in valid_clauses:
-            dropped.append((entry, f"unknown clause: {clause}"))
+        if _normalize_ws(r.text_snippet) not in norm_doc:
+            dropped.append((r, "snippet not in document"))
             continue
-        if _normalize_ws(snippet) not in norm_doc:
-            dropped.append((entry, "snippet not in document"))
-            continue
-        cleaned.append({
-            "text_snippet": snippet,
-            "playbook_clause_reference": clause,
-            "suggested_fix": fix,
-        })
+        cleaned.append(r)
 
     if dropped:
         sys.stderr.write(f"[warn] dropped {len(dropped)} invalid entries:\n")
-        for entry, reason in dropped:
-            sys.stderr.write(f"  - {reason}: {entry.get('text_snippet','')[:80]}...\n")
+        for r, reason in dropped:
+            sys.stderr.write(f"  - {reason}: {r.text_snippet[:80]}...\n")
     return cleaned
 
 
@@ -293,7 +295,10 @@ def main():
         sys.exit("No API key. Set ANTHROPIC_API_KEY (or OPENAI_API_KEY), or pass --api-key.")
 
     document = load_document(args.document)
-    playbook = load_playbook(args.playbook)
+    try:
+        playbook = load_playbook(args.playbook)
+    except (ValidationError, ValueError) as e:
+        sys.exit(f"Playbook validation failed: {e}")
 
     system = SYSTEM_PROMPT
     user = build_user_prompt(document, playbook)
@@ -301,10 +306,14 @@ def main():
     print(f"[info] provider={provider} model={args.model or 'default'} clauses={len(playbook)}")
     raw = call_llm(system, user, provider, args.model, api_key)
 
-    redlines = parse_redlines(raw)
-    redlines = validate_and_clean(redlines, document, playbook)
+    try:
+        redlines = parse_redlines(raw)
+    except (ValidationError, json.JSONDecodeError, ValueError) as e:
+        sys.exit(f"Model response failed validation: {e}")
+    redlines = validate_redlines(redlines, document, playbook)
 
-    Path(args.output).write_text(json.dumps(redlines, indent=2, ensure_ascii=False))
+    output = [r.model_dump() for r in redlines]
+    Path(args.output).write_text(json.dumps(output, indent=2, ensure_ascii=False))
     print(f"[info] wrote {len(redlines)} redlines to {args.output}")
 
 
